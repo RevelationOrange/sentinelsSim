@@ -1,0 +1,9 @@
+maybe implement a 'give' action for stuff like 'one player may draw a card'
+so like: -action +type give +target @types player @quantity (entire other action)
+
+
+or: -action +type give +givetype draw +target @types player @quantity 1 +givetarget @types player
+use givetarget to pick the player
+then add a method to the action class: Action.give()
+self.actionType = self.givetype
+then do self.actionHandler(source, target, actionAfterGive)
