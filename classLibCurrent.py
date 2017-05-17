@@ -26,6 +26,13 @@ class joinArgs(argparse.Action):
     def __call__(self, parser, namespace, values, *args, **kwargs):
         setattr(namespace, self.dest, ' '.join(values))
 
+
+# in order to create a card (and action, and target), I used command line-style arguments, with options used to make
+# each attribute of the card/action/target
+# name and text of a card need to be single strings, so they're joined together
+# owner can be 'absolute zero', so it also needs to be a joined string
+# actions are appended to a list and added one at a time, using + for the next prefix (the action options)
+# powers and effects will work similarly, but will consist of one or more actions; their implementation needs to be fixed
 cardParser = argparse.ArgumentParser()
 cardParser.add_argument("-name", nargs='+', action=joinArgs)
 cardParser.add_argument("-text", nargs='+', action=joinArgs)
@@ -37,6 +44,7 @@ cardParser.add_argument("-power", dest='powers', nargs='+', action='append', def
 cardParser.add_argument("-effect", dest='effects', nargs='+', action='append', default=[])
 cardParser.add_argument("-hp", type=int, default=None)
 
+# targets are added like actions above, with @ used as a prefix for target options
 actionParser = argparse.ArgumentParser(prefix_chars='+')
 actionParser.add_argument("+source")
 actionParser.add_argument("+type")
@@ -55,32 +63,30 @@ targetParser.add_argument("@quantity", dest='quantities', nargs='+', action='app
 
 effPowParser = argparse.ArgumentParser(prefix_chars='~')
 
+# (each option will be explained in detail in the class definition)
+
+# these definitions are put into a dictionary so they can be used for comparisons, based on text options for restrictions in targets
+# (I feel like there should be a better way to do this, but I don't know what it is)
 def eq(x,y):
     return x == y
-
 def ne(x,y):
     return x != y
-
 def lt(x,y):
     return x < y
-
 def le(x,y):
     return x <= y
-
 def gt(x,y):
     return x > y
-
 def ge(x,y):
     return x >= y
-
 def within(x,y):
     return x >= y[0] and x <= y[1]
-
 def nothing(x):
     return x
-
 testTypeDict = {'==':eq, '!=':ne, '<':lt, '<=':le, '>':gt, '>=':ge, 'range':within, 'noth':nothing}
 
+# these functions are used to create custom tests, that a card is passed into (test(card) returns a bool)
+# stuff like, does it have x keyword, does it have hp at all, is its hp over/under/whatever some number
 def kwTest(res, default=True):
     def tst(c):
         if res in c.keywords:
@@ -105,6 +111,29 @@ def hpTest(tstType, val):
             return False
     return tst
 
+# the Target class, for storing criteria used to pick the target of an action
+# creating a target is done via command line-like arguments (same for actions and cards)
+# @areas: the types of play areas that can be targeted- villain, hero, or environment ('any' is replaced by all 3)
+# @sections: the sections in a play area that can be targeted- inPlay, character, hand (maybe?), deck, trash
+# @restrictions: criteria to check the card/area for
+# the first thing here (in the parse string) will be either and or or. this will tell the getTargets function what type
+# of search it's doing. ex: a card that says 'destroy one ongoing on equipment card' will have an or in restrictions, so
+# when checking cards, they need only have one of either ongoing or equipment in the keywords. ex: 'destroy an ongoing
+# card' will have and in restrictions, so any card needs to have ongoing as a keyword and not indestructible
+# then, for each restriction, a test function is created. the default check type is ==, which will be changed when 'not'
+# is encountered in the restrictions. if the restriction  is 'hp', by itself, a test will be created that checks if the
+# card has an hp value, 'hp < 5' for example will check if the card's hp is less than 5 (this is where testTypeDict is
+# used). anything else will be assumed to be a keyword to be checked.
+# @quantities: a list of values to use for whatever the action is; for draw actions, it's just a number, for damage,
+# it's a number and the damage type. if opt is present, a 'skip' option is added when picking targets; if 'gate' is
+# present, picking skip cancels the remaining quantities that might be present; if @pick was specified for this target,
+# the last entry of the quantity will be the index number to choose from the target list.
+# @xquants: this is a way to implement a variable number of quantities for the target (or just a convenient way to
+# duplicate them). if it's a number (or H, which will be converted to a number on game start), that many duplicates of
+# the first quantity will be made; if it's 'all', the number used will be the length of the target list
+# @pick: when the targets need to be sorted, such as when a card says 'deal the highest hp hero target 2 damage', pick
+# is specified with the type of criteria; hp can be used for cards, ncardsInPlay for play areas (for example; not yet
+# implemented)
 class Target:
     def __init__(self, parseStr):
         target = targetParser.parse_args(parseStr)
@@ -155,6 +184,17 @@ class Target:
                 reprStr += ", {}".format(' '.join(q))
         return reprStr
 
+# the Action class, for storing instructions to perform corresponding to an action (like 'draw 3 cards')
+# +source: the origin of the action; 'self' (applied to a play area or card) or 'char' (applied to the character of the
+# play area). I haven't really cemented this yet; ex: when actions happen that aren't played by a card, not sure
+# exactly what the source would be in all cases.
+# +type: the type of action- draw, damage, destroy, heal, deck (put a card in a deck), give (transfer the action to
+# another target), put (designate where an ongoing card goes into play)
+# +givetype: when it's a give action, the action type here is the type that's given
+# +target: add a target object for the action (see above)
+# +givetarget: same as +target, but defines targeting for a give action
+# createdStr is stored for later use when a give action needs to be created, and its type replaced with its givetype
+# which is what given() does
 class Action:
     def __init__(self, parseStr):
         action = actionParser.parse_args(parseStr)
@@ -176,6 +216,17 @@ class Action:
     def __repr__(self):
         return "{}, {}, {}".format(self.source, self.actionType, ', '.join([x.__repr__() for x in self.targets]))
 
+# the Card class, for storing all information about a card- name, descriptive text, actions, etc.
+# -name, -text: pretty self explanatory
+# -type: hero, villain, or environment
+# -keywords: ongoing, equipment, one-shot, etc.
+# current and max hp are set to the given -hp value, or 'None' if it's not given
+# -action: add an action object for the card (see above)
+# -power: add a power to the card (this is still being worked out)
+# -owner: the name of the hero/villain/environment that owns the card (mostly used to determine the trash it goes to)
+# setOwner() can be used to change the owner after the card is created- likely, this will be used when a player is
+# created, going through a deck, creating and setting the owner for each card
+# takeDamage() and heal() are functions so that cards themselves can handle their hp
 class Card:
     def __init__(self, parseStr):
         card = cardParser.parse_args(parseStr.split())
@@ -210,6 +261,13 @@ class Card:
             rstr += " {}/{} hp".format(self.currentHP, self.maxHP)
         return rstr
 
+# the PlayArea class, for storing info pertaining to a play area: deck, cards in play, hand, trash, character card(s), etc.
+# player is the name of who's playing (once fully automated, will likely just be 'human' or something
+# character is the main character card(s), that determine if you're still in play; none for the environment play area
+# the deck is the list of your cards, and when a play area is created each card's owner is set
+# the effects list tracks ongoing effects, like 'all damage this turn is melee' or 'when x card is destroyed, deal y
+# damage to z'
+# the powers list tracks the powers that can be used
 class PlayArea:
     def __init__(self, player, hero, deckList):
         self.player = player
@@ -235,12 +293,14 @@ class PlayArea:
             newDeck.append(self.deck.pop(rng.randint(0, len(self.deck)-rngoffset)))
         self.deck = newDeck
     def draw(self, x):
+        # draw(x) takes x cards from the top of the deck and puts in into the hand
         for _ in range(x):
             if not self.deck:
                 self.shuffle()
             if self.deck:
                 self.hand.append(self.deck.pop(0))
     def setH(self, H):
+        # setH(H) goes through every card and replaces H with the value it will be for the rest of the game
         for card in self.deck:
             ## probly also check hp for H
             for act in card.actions:
@@ -249,6 +309,10 @@ class PlayArea:
                     if t.xquants == 'H':
                         t.xquants = H
     def play(self, n=0):
+        # if n is >= 0, it's the index of the card to play in the hand list
+        # if it's -1, play the card from the top of the deck; -2, play the card from the bottom of the deck
+        # the play area, card, and its actions are returned to the action handler, with the flag that this is a card
+        # being played (so it knows to trash it afterwards [if it's a one-shot])
         if n < 0:
             card = self.deck.pop(n+1)
         else:
@@ -271,6 +335,10 @@ class PlayArea:
         return "{} playing {}".format(self.player, self.character.name)
 
 
+# the Game class, for overseeing everything, basically
+# villains and villainDict: an ordered list (for turn order purposed) and a dictionary (for ease of access) with all the
+# villains added to the game. same for heroes and heroDict.
+# there can only ever be one environment, so that one doesn't need to be a list
 class Game:
     def __init__(self):
         self.villains = []
@@ -281,12 +349,15 @@ class Game:
         self.turnOrder = []
         self.actFxns = {'damage': self.damageHandler, 'destroy': self.destroyHandler, 'deck': self.deckHandler, 'heal': self.healHandler}
     def addHero(self, h):
+        # when a hero (a play area) is added, check if there are less than 5 heroes already before adding; if so, add h
+        # to the hero list and dict
         if len(self.heroDict) < 5:
             self.heroDict[h.character.name] = h
             self.heroes.append(h)
         else:
             print("No more than 5 heroes allowed in a game.")
     def addVillain(self, vil):
+        # same as addHero() but for villains
         if len(self.villainDict) < 5:
             self.villainDict[vil.character.name] = vil
             self.villains.append(vil)
@@ -295,11 +366,13 @@ class Game:
     def setEnvironment(self, e):
         self.environment = e
     def setupGame(self):
+        # make sure that the game includes 3 to 5 heroes and either 1 villain, or the same number of villains as heroes (team villains)
         if len(self.heroes) < 1:
             print("At least 3 heroes required to play.")
         elif len(self.villains) != len(self.heroes):
             print("In a team villains game, you have to have the same number of heroes and villains.")
         else:
+            # place each villain and hero alternately in the turn order, then the environment
             i = 0
             for h in self.heroes:
                 if i < len(self.villains):
@@ -309,8 +382,9 @@ class Game:
             self.turnOrder.append(self.environment)
         ## do villain setup stuff; figure out how that's determined later
         for h in self.heroes:
-            h.draw(4)
+            # set H for each card that uses it, then each hero draws 4 cards
             h.setH(len(self.heroes))
+            h.draw(4)
         self.environment.setH(len(self.heroes))
     def actionHandler(self, source, card, actions, played=False):
         print(source, "is doing actions from", card)
