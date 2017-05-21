@@ -36,7 +36,7 @@ class joinArgs(argparse.Action):
 cardParser = argparse.ArgumentParser()
 cardParser.add_argument("-name", nargs='+', action=joinArgs)
 cardParser.add_argument("-text", nargs='+', action=joinArgs)
-cardParser.add_argument('-owner', dest='owner', nargs='+', action=joinArgs)
+cardParser.add_argument("-owner", dest='owner', nargs='+', action=joinArgs)
 cardParser.add_argument("-type")
 cardParser.add_argument("-keywords", nargs='+', default=[])
 cardParser.add_argument("-action", dest='actions', nargs='+', action='append', default=[])
@@ -61,7 +61,8 @@ targetParser.add_argument("@xquants")
 targetParser.add_argument("@quantity", dest='quantities', nargs='+', action='append')
 ## maybe have a separate thing for effects, since they're pretty complex
 
-effPowParser = argparse.ArgumentParser(prefix_chars='~')
+powerParser = argparse.ArgumentParser(prefix_chars='~')
+powerParser.add_argument("~action", dest='actions', nargs='+', action='append', default=[])
 
 # (each option will be explained in detail in the class definition)
 
@@ -111,6 +112,14 @@ def hpTest(tstType, val):
             return False
     return tst
 
+def idTest(idnum, default=True):
+    def tst(c):
+        if c.uid == idnum:
+            return default
+        else:
+            return not default
+    return tst
+
 # the Target class, for storing criteria used to pick the target of an action
 # creating a target is done via command line-like arguments (same for actions and cards)
 # @areas: the types of play areas that can be targeted- villain, hero, or environment ('any' is replaced by all 3)
@@ -135,7 +144,7 @@ def hpTest(tstType, val):
 # is specified with the type of criteria; hp can be used for cards, ncardsInPlay for play areas (for example; not yet
 # implemented)
 class Target:
-    def __init__(self, parseStr):
+    def __init__(self, parseStr, idn):
         target = targetParser.parse_args(parseStr)
         if target.areas == ['any']:
             self.areas = ['villain', 'hero', 'environment']
@@ -167,6 +176,9 @@ class Target:
                         self.restrictions.append(ifHpTest(defaultReturn))
                 else:
                     self.restrictions.append(ifHpTest(defaultReturn))
+            elif restr == 'self':
+                print('adding self target restriction')
+                self.restrictions.append(idTest(idn, defaultReturn))
             else:
                 self.restrictions.append(kwTest(restr, defaultReturn))
             i += 1
@@ -196,18 +208,18 @@ class Target:
 # createdStr is stored for later use when a give action needs to be created, and its type replaced with its givetype
 # which is what given() does
 class Action:
-    def __init__(self, parseStr):
+    def __init__(self, parseStr, idn=0):
         action = actionParser.parse_args(parseStr)
         self.source = action.source
         self.actionType = action.type
         self.giveType = action.givetype
         self.targets = []
         for t in action.targets:
-            self.targets.append(Target(t))
+            self.targets.append(Target(t, idn))
         self.giveTargets = []
         if action.givetargets:
             for gt in action.givetargets:
-                self.giveTargets.append(Target(gt))
+                self.giveTargets.append(Target(gt, idn))
         self.createdStr = parseStr
     def given(self):
         gA = Action(self.createdStr)
@@ -230,6 +242,7 @@ class Action:
 class Card:
     def __init__(self, parseStr):
         card = cardParser.parse_args(parseStr.split())
+        self.uid = gid.id()
         self.name = card.name
         self.text = card.text
         self.type = card.type
@@ -238,14 +251,17 @@ class Card:
         self.maxHP = card.hp
         self.actions = []
         for act in card.actions:
-            self.actions.append(Action(act))
+            self.actions.append(Action(act, self.uid))
         self.powers = []
         if card.powers:
             for pow in card.powers:
-                self.powers.append(Action(pow))
+                p = powerParser.parse_args(pow)
+                powActs = []
+                for pAct in p.actions:
+                    powActs.append(Action(pAct, self.uid))
+                self.powers.append(powActs)
         self.owner = card.owner
         self.actFxns = {'damage': self.takeDamage, 'heal': self.heal}
-        self.uid = gid.id()
     def setOwner(self, o):
         self.owner = o
     def takeDamage(self, x):
@@ -387,6 +403,15 @@ class Game:
             h.draw(4)
         self.environment.setH(len(self.heroes))
     def actionHandler(self, source, card, actions, played=False):
+        # actionHandler is the primary heavy lifter of the sim; since everything is broken down into types of actions,
+        # they all go through this function
+        # the source play area is given, the card the actions originate from is given, and the list of actions is given
+        # the reason all three are separately needed is because some actions come from cards in play areas other than
+        # their owners' (such as absolute zero's impale) and the actions happening aren't always exactly the list of
+        # actions from the card (such as a card with multiple powers being played vs one of the powers being used)
+        # played is used to indicate when it's a card played from their hand, for the purposes of discarding one-shots
+        # (though really, it might just be that if the card is a one shot, it should get put in its trash after this
+        # regardless, but there might be some weird case where that's not true, I dunno) (we'll see)
         print(source, "is doing actions from", card)
         for act in actions:
             if act.source == 'self':
@@ -412,7 +437,7 @@ class Game:
                         pass
                     for q in target.quantities:
                         if 'opt' in q:
-                            skp = int(input('enter 0 to draw, 1 to skip '))
+                            skp = int(input('enter 0 to draw {}, 1 to skip '.format(q[0])))
                             if skp == 0:
                                 actionTarget.actFxns[act.actionType](int(q[0]))
                         else:
@@ -515,9 +540,9 @@ class Game:
                             continue
                         self.actionHandler(actionTarget['area'], actionTarget['card'], [givenAction])
             elif act.actionType == 'put':
-                ## the card gets put into play based on the put's targeting
-                ## then, if there's an associated effect, the put target is used to setup that effect
-                ## and the effect has its own targeting to determine where to put it
+                # the card gets put into play based on the put's targeting
+                # then, if there's an associated effect, the put target is used to setup that effect
+                # and the effect has its own targeting to determine where to put it
                 for target in act.targets:
                     print(act.actionType, 'target:', target)
                     tAs = []
@@ -544,6 +569,7 @@ class Game:
                         #         pass
                         if card.powers:
                             for pow in card.powers:
+                                print('a power:', pow)
                                 putTarget['area'].powers.append([pow, card])
         if played:
             if 'one-shot' in card.keywords:

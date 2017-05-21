@@ -25,12 +25,19 @@ rftdstr += " -type hero -keywords one-shot -action +source self +type give +give
 rftdstr += " +givetarget @areas playarea hero @xquants H @quantity 1 -action +source self +type draw +target @areas self @quantity 1 opt"
 
 cdstr = "-name Cleansing Downpour -text Power: Each Hero Target regains 2 HP. -type hero -keywords ongoing -action +source self +type put"
-cdstr += " +target @areas playarea self @sections inplay @quantity 1 -power +source self +type heal +target @areas hero"
+cdstr += " +target @areas playarea self @sections inplay @quantity 1 -power ~action +source self +type heal +target @areas hero"
 cdstr += " @sections char inplay @restrictions or hp @xquants all @quantity 2"
 
 ghsstr = "-name Grievous Hail Storm -text Power: Tempest deals each non-Hero Target 2 Cold Damage. -type hero -keywords ongoing"
-ghsstr += " -action +source self +type put +target @areas playarea self @sections inplay @quantity 1 -power +source char"
+ghsstr += " -action +source self +type put +target @areas playarea self @sections inplay @quantity 1 -power ~action +source char"
 ghsstr += " +type damage +target @areas villain environment @sections char inplay @restrictions or hp @xquants all @quantity 2 cold"
+
+lhstr = "-name Localized Hurricane -text Increase Damage dealt to Tempest by 1. Power: Tempest deals up to 2 Targets 3"
+lhstr += " Projectile Damage each. You may draw 2 cards. Power: Destroy this card. -type hero -keywords ongoing -action"
+lhstr += " +source self +type put +target @areas playarea self @sections inplay @quantity 1 -power ~action +source char"
+lhstr += " +type damage +target @areas any @sections char inplay @restrictions or hp @xquants 2 @quantity 3 projectile opt"
+lhstr += " ~action +source self +type draw +target @areas self @quantity 2 opt"
+lhstr += " -power ~action +source self +type destroy +target @areas self @sections inplay @restrictions or self @quantity 1"
 
 AC = Card(acstr)
 BL = Card(blstr)
@@ -41,9 +48,10 @@ LS = Card(lsstr)
 RftD = Card(rftdstr)
 CD = Card(cdstr)
 GHS = Card(ghsstr)
+LH = Card(lhstr)
 # AC.setOwner('Tempest')
 # LB.setOwner('Tempest')
-tdeck = [CD]*20 + [GHS]*20
+tdeck = [RftD]*20 + [LH]*20
 tempest = PlayArea('derp', Card('-name Tempest -text Squall: Tempest deals all non-hero targets 1 Projectile damage. -type hero -hp 26'), tdeck)
 vdeck = [Card('-name generic villain card -text do a bad thing -type villain -keywords one-shot')]*40
 vil = PlayArea('AI', Card('-name baron derp -text herp derp -type villain -hp 10'), vdeck)
@@ -83,13 +91,16 @@ if 1:
                 print('after hand:', pl.hand)
                 print('hand len:', len(pl.hand))
                 # power phase
+                print('-powers phase-')
                 if pl.powers:
                     ## make a temp list of powers, pop as used (in case multiple powers can be used in a turn)
                     print([x[0] for x in pl.powers])
                     i = -1
                     while i not in range(len(pl.powers)):
                         i = int(input('enter power number: '))
-                    thisGame.actionHandler(pl, pl.powers[i][1], [pl.powers[i][0]])
+                    thisGame.actionHandler(pl, pl.powers[i][1], pl.powers[i][0])
+                else:
+                    print('(no usable powers)')
             else:
                 thisGame.actionHandler(*pl.play(-1))
             print(pl.inPlay)
