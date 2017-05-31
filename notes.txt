@@ -1,2 +1,4 @@
 how to deal with powers:
 powers as 'cards', with action lists etc
+
+need to separate powers and effects, they can't be put together, unless also using a bunch of extra ifs to suss them out

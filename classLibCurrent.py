@@ -57,12 +57,21 @@ targetParser.add_argument("@areas", nargs='+')
 targetParser.add_argument("@sections", nargs='+')
 targetParser.add_argument("@restrictions", nargs='+', default=[])
 targetParser.add_argument("@pick")
-targetParser.add_argument("@xquants")
+targetParser.add_argument("@nquants")
 targetParser.add_argument("@quantity", dest='quantities', nargs='+', action='append')
 ## maybe have a separate thing for effects, since they're pretty complex
 
-powerParser = argparse.ArgumentParser(prefix_chars='~')
-powerParser.add_argument("~action", dest='actions', nargs='+', action='append', default=[])
+effectParser = argparse.ArgumentParser(prefix_chars='~')
+effectParser.add_argument("~action", dest='actions', nargs='+', action='append', default=[])
+effectParser.add_argument("~trigger", nargs='+')
+effectParser.add_argument("~criteria")
+effectParser.add_argument("~mod")
+# some effects will apply to a play area, some to a specific card, like 'increase damage to tempest by 1'
+# the put target will determine what play area the effect is added to, but for card-specific effects, some more specific
+# targeting is needed
+# or it's not, the put target should target the specific card, and the effect (along with the powers) is put into that
+# play area (maybe?)
+
 
 # (each option will be explained in detail in the class definition)
 
@@ -137,7 +146,7 @@ def idTest(idnum, default=True):
 # it's a number and the damage type. if opt is present, a 'skip' option is added when picking targets; if 'gate' is
 # present, picking skip cancels the remaining quantities that might be present; if @pick was specified for this target,
 # the last entry of the quantity will be the index number to choose from the target list.
-# @xquants: this is a way to implement a variable number of quantities for the target (or just a convenient way to
+# @nquants: this is a way to implement a variable number of quantities for the target (or just a convenient way to
 # duplicate them). if it's a number (or H, which will be converted to a number on game start), that many duplicates of
 # the first quantity will be made; if it's 'all', the number used will be the length of the target list
 # @pick: when the targets need to be sorted, such as when a card says 'deal the highest hp hero target 2 damage', pick
@@ -177,13 +186,12 @@ class Target:
                 else:
                     self.restrictions.append(ifHpTest(defaultReturn))
             elif restr == 'self':
-                print('adding self target restriction')
                 self.restrictions.append(idTest(idn, defaultReturn))
             else:
                 self.restrictions.append(kwTest(restr, defaultReturn))
             i += 1
         self.quantities = target.quantities
-        self.xquants = target.xquants
+        self.nquants = target.nquants
         self.pick = target.pick
     def __repr__(self):
         reprStr = ""
@@ -228,6 +236,19 @@ class Action:
     def __repr__(self):
         return "{}, {}, {}".format(self.source, self.actionType, ', '.join([x.__repr__() for x in self.targets]))
 
+class Effect:
+    def __init__(self, parseStr, idn=0):
+        effect = effectParser.parse_args(parseStr)
+        self.trig = effect.trigger
+        self.actions = effect.actions
+        self.criteria = effect.criteria
+        self.mod = effect.mod
+        self.targets = ''
+    def setTargets(self, ids):
+        self.targets = ids
+    def __repr__(self):
+        return "on {} {} ({}): {}, {}".format(self.criteria, ' '.join(self.trig), self.targets, self.mod, self.actions)
+
 # the Card class, for storing all information about a card- name, descriptive text, actions, etc.
 # -name, -text: pretty self explanatory
 # -type: hero, villain, or environment
@@ -253,13 +274,18 @@ class Card:
         for act in card.actions:
             self.actions.append(Action(act, self.uid))
         self.powers = []
-        if card.powers:
-            for pow in card.powers:
-                p = powerParser.parse_args(pow)
-                powActs = []
-                for pAct in p.actions:
-                    powActs.append(Action(pAct, self.uid))
-                self.powers.append(powActs)
+        self.effects = []
+        # if card.powers:
+        for pow in card.powers:
+            p = effectParser.parse_args(pow)
+            powActs = []
+            for pAct in p.actions:
+                powActs.append(Action(pAct, self.uid))
+            self.powers.append(powActs)
+        # if card.effects:
+        for eff in card.effects:
+            e = Effect(eff)
+            self.effects.append(e)
         self.owner = card.owner
         self.actFxns = {'damage': self.takeDamage, 'heal': self.heal}
     def setOwner(self, o):
@@ -308,7 +334,7 @@ class PlayArea:
         while self.deck:
             newDeck.append(self.deck.pop(rng.randint(0, len(self.deck)-rngoffset)))
         self.deck = newDeck
-    def draw(self, x):
+    def draw(self, x=1):
         # draw(x) takes x cards from the top of the deck and puts in into the hand
         for _ in range(x):
             if not self.deck:
@@ -322,8 +348,8 @@ class PlayArea:
             for act in card.actions:
                 for t in act.targets + act.giveTargets:
                     ## definitely also check damage values, that's gonna show up a lot in the villain cards, obvs
-                    if t.xquants == 'H':
-                        t.xquants = H
+                    if t.nquants == 'H':
+                        t.nquants = H
     def play(self, n=0):
         # if n is >= 0, it's the index of the card to play in the hand list
         # if it's -1, play the card from the top of the deck; -2, play the card from the bottom of the deck
@@ -456,12 +482,12 @@ class Game:
                         if target.pick == 'hp':
                             targetList = sorted(targetList, key=lambda x: x['card'].currentHP)
                     quants = []
-                    if target.xquants:
-                        if target.xquants == 'all':
+                    if target.nquants:
+                        if target.nquants == 'all':
                             for _ in targetList:
                                 quants.append(target.quantities[0])
                         else:
-                            for _ in range(int(target.xquants)):
+                            for _ in range(int(target.nquants)):
                                 quants.append(target.quantities[0])
                     else:
                         quants = target.quantities.copy()
@@ -489,7 +515,26 @@ class Game:
                             if 'gate' in q:
                                 break
                             continue
-                        self.actFxns[act.actionType](actionSource, actionTarget, *q)
+                        modQ = []
+                        for x in q:
+                            if canIntConvert(x):
+                                modQ.append(int(x))
+                            else:
+                                modQ.append(x)
+                        ## check effects here, if possible; avoids having an effects check in every handler
+                        for eff,srcCard in actionSource['effects']:
+                            pass
+                        for eff,srcCard in actionTarget['effects']:
+                            print('an effect:', eff)
+                            if eff.trig == [act.actionType, 'taken']:
+                                print(modQ, eff.mod, type(eff.mod))
+                                if canIntConvert(eff.mod):
+                                    modQ[0] += int(eff.mod)
+                                else:
+                                    ## this means it doesn't modify a number; it could indicate doing actions or
+                                    ## limiting a number
+                                    pass
+                        self.actFxns[act.actionType](actionSource, actionTarget, *modQ)
             elif act.actionType == 'give':
                 givenAction = act.given()
                 for target in act.giveTargets:
@@ -505,12 +550,12 @@ class Game:
                         ## sort the target list by whatever the criteria, like cards in play or whatever
                         pass
                     quants = []
-                    if target.xquants:
-                        if target.xquants == 'all':
+                    if target.nquants:
+                        if target.nquants == 'all':
                             for _ in targetList:
                                 quants.append(target.quantities[0])
                         else:
-                            for _ in range(int(target.xquants)):
+                            for _ in range(int(target.nquants)):
                                 quants.append(target.quantities[0])
                     else:
                         quants = target.quantities.copy()
@@ -564,13 +609,12 @@ class Game:
                             i = int(input('enter target number: '))
                         putTarget = putTargetList.pop(i)
                         putTarget['area'].inPlay.append(actionSource['card'])
-                        # if card.effects:
-                        #     for eff in card.effects:
-                        #         pass
-                        if card.powers:
-                            for pow in card.powers:
-                                print('a power:', pow)
-                                putTarget['area'].powers.append([pow, card])
+                        for pow in card.powers:
+                            print('a power:', pow)
+                            putTarget['area'].powers.append([pow, card])
+                        for eff in card.effects:
+                            eff.setTargets(putTarget['card'].uid)
+                            putTarget['area'].effects.append([eff, card])
         if played:
             if 'one-shot' in card.keywords:
                 if card.type == 'environment':
