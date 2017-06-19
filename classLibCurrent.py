@@ -362,6 +362,7 @@ class PlayArea:
         return self, card, card.actions, True
     def destroy(self, card):
         self.inPlay.remove(card)
+        ## find and remove effects from this card in the relevant play areas
     def putInTrash(self, card):
         self.trash.append(card)
     def putInDeck(self, card, location):
